@@ -67,6 +67,7 @@ def day_of_month_share_avg_monthly(daily: pd.DataFrame, date_col: str, qty_col: 
     data) -- only use this if you specifically want to damp one anomalous
     month's influence rather than pool the raw totals.
     """
+
     d = daily.copy()
     d["month"] = d[date_col].dt.to_period("M")
     d["day"] = d[date_col].dt.day
@@ -105,6 +106,7 @@ def allocate_target_to_territories(
     historical_tagged_df: pd.DataFrame,
     branch_col: str,
     territory_col: str,
+    territory_name_col: str,
     qty_col: str,
 ) -> pd.DataFrame:
     """
@@ -113,6 +115,10 @@ def allocate_target_to_territories(
     (from the same Order Register -> TDC tagged data used to build the
     day-of-month curves). Weights sum to 1.0 within the branch, so the
     territory targets sum back to exactly branch_target_qty.
+
+    territory_col (the code) is still used as the grouping/weighting key --
+    that logic is unchanged. territory_name_col is looked up per code purely
+    for display and carried through as an extra "territory_name" column.
     """
     branch_rows = historical_tagged_df[historical_tagged_df[branch_col] == branch]
     if branch_rows.empty:
@@ -120,9 +126,11 @@ def allocate_target_to_territories(
 
     terr_totals = branch_rows.groupby(territory_col)[qty_col].sum()
     weights = terr_totals / terr_totals.sum()
+    name_map = branch_rows.groupby(territory_col)[territory_name_col].first()
 
     return pd.DataFrame({
         territory_col: weights.index,
+        "territory_name": weights.index.map(name_map),
         "territory_share_of_branch": weights.values,
         "territory_target_qty": weights.values * branch_target_qty,
     })
@@ -134,6 +142,7 @@ def build_daily_territory_forecast(
     historical_tagged_df: pd.DataFrame,
     branch_col: str,
     territory_col: str,
+    territory_name_col: str,
     date_col: str,
     qty_col: str,
 ) -> pd.DataFrame:
@@ -143,6 +152,11 @@ def build_daily_territory_forecast(
     each territory's target across days using its own day_of_month_share
     curve (distribute_monthly_target_to_days). Returns one row per
     territory x day with a forecast_qty column.
+
+    territory_col (the code) is still used internally to match each
+    territory's day-of-month pattern -- that lookup is unchanged. The
+    returned table carries "territory_name" instead of the code column,
+    since the code is only needed for the internal join, not for display.
     """
     day_pattern = day_of_month_share(
         historical_tagged_df, date_col=date_col, qty_col=qty_col,
@@ -159,7 +173,8 @@ def build_daily_territory_forecast(
             branch_target_qty=target_info["target_qty"],
             branch=branch,
             historical_tagged_df=historical_tagged_df,
-            branch_col=branch_col, territory_col=territory_col, qty_col=qty_col,
+            branch_col=branch_col, territory_col=territory_col,
+            territory_name_col=territory_name_col, qty_col=qty_col,
         )
 
         for _, row in terr_split.iterrows():
@@ -168,7 +183,7 @@ def build_daily_territory_forecast(
             ]
             daily = distribute_monthly_target_to_days(row["territory_target_qty"], terr_pattern)
             daily[branch_col] = branch
-            daily[territory_col] = row[territory_col]
+            daily["territory_name"] = row["territory_name"]
             daily["region_code"] = region_code
             all_forecasts.append(daily)
 
